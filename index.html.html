@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CRM Pessoal</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script>tailwind.config={darkMode:'class'}</script>
+<style type="text/tailwindcss">
+@layer components{
+.card{@apply bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-3}
+.btn{@apply px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-500/20 hover:opacity-80 inline-flex items-center gap-1 whitespace-nowrap}
+.btn-p{@apply bg-indigo-600 text-white}
+.btn-g{@apply bg-emerald-600 text-white}
+.inp{@apply w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-transparent px-3 py-2 text-sm}
+.bdg{@apply text-xs px-2 py-0.5 rounded-full font-semibold whitespace-nowrap}
+}
+select option{color:#111}
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+<div class="md:flex min-h-screen">
+  <aside class="hidden md:flex flex-col w-52 p-4 border-r border-slate-200 dark:border-slate-800 sticky top-0 h-screen">
+    <div class="font-bold text-lg mb-4">CRM Pessoal</div>
+    <nav id="sideNav" class="flex flex-col gap-1"></nav>
+  </aside>
+  <main class="flex-1 p-4 pb-24 md:pb-6 max-w-5xl w-full mx-auto">
+    <header class="flex items-center justify-between mb-4">
+      <h1 id="ttl" class="text-xl font-bold"></h1>
+      <div class="flex gap-2">
+        <button class="btn" data-a="theme" title="Tema"><i data-lucide="sun-moon" class="w-4 h-4"></i></button>
+        <button class="btn" data-a="export" title="Exportar JSON"><i data-lucide="download" class="w-4 h-4"></i></button>
+        <button class="btn" data-a="import" title="Importar JSON"><i data-lucide="upload" class="w-4 h-4"></i></button>
+        <input type="file" id="imp" accept=".json,application/json" class="hidden">
+      </div>
+    </header>
+    <div id="view"></div>
+  </main>
+</div>
+<nav id="botNav" class="md:hidden fixed bottom-0 inset-x-0 flex border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 z-40"></nav>
+<div id="modal"></div>
+
+<script>
+/* ================= UTILS ================= */
+const $=s=>document.querySelector(s);
+const pad=n=>String(n).padStart(2,'0');
+const iso=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const pd=s=>new Date(s+'T00:00:00');
+const addDays=(s,n)=>{const d=pd(s);d.setDate(d.getDate()+n);return iso(d)};
+const addMonth=s=>{const d=pd(s),day=d.getDate();d.setDate(1);d.setMonth(d.getMonth()+1);d.setDate(Math.min(day,new Date(d.getFullYear(),d.getMonth()+1,0).getDate()));return iso(d)};
+let T=iso(new Date());
+const br=s=>s?s.split('-').reverse().join('/'):'';
+const brl=n=>Number(n||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+const ic=(n,c='w-4 h-4')=>`<i data-lucide="${n}" class="${c}"></i>`;
+const sum=l=>l.reduce((a,f)=>a+Number(f.amount),0);
+const byDate=(a,b)=>a.date.localeCompare(b.date);
+const wa=n=>{let d=String(n||'').replace(/\D/g,'');if(d.length<=11)d='55'+d;return 'https://wa.me/'+d};
+
+/* ================= DATA SERVICE =================
+ Toda leitura/escrita passa por aqui. Para migrar pra um servidor,
+ troque só o corpo destes métodos por fetch() (e torne-os async). */
+const DataService={
+  K:'crm_pessoal_v1',_d:null,
+  _load(){
+    if(this._d)return this._d;
+    try{this._d=JSON.parse(localStorage.getItem(this.K))}catch(e){}
+    if(!this._d||!this._d.clients){this._d=seed();this._save()}
+    return this._d;
+  },
+  _save(){localStorage.setItem(this.K,JSON.stringify(this._d))},
+  list(c){return this._load()[c]},
+  get(c,id){return this.list(c).find(x=>x.id===id)},
+  upsert(c,o){
+    const l=this.list(c);
+    if(!o.id){o.id=uid();l.push(o)}else{const i=l.findIndex(x=>x.id===o.id);i<0?l.push(o):l[i]=o}
+    this._save();return o;
+  },
+  remove(c,id){const d=this._load();d[c]=d[c].filter(x=>x.id!==id);this._save()},
+  exportJSON(){return JSON.stringify(this._load(),null,2)},
+  importJSON(txt){
+    const d=JSON.parse(txt);
+    if(!['clients','events','fin'].every(k=>Array.isArray(d[k])))throw new Error('Arquivo inválido');
+    this._d=d;this._save();
+  },
+  pref(k,v){if(v===undefined)return localStorage.getItem('crm_'+k);localStorage.setItem('crm_'+k,v)}
+};
+const DS=DataService;
+
+function seed(){
+  return{
+    clients:[
+      {id:uid(),name:'Carlos Mendes',wa:'48999990001',origin:'Instagram',interest:'Casa 3 quartos - Rio Vermelho',status:'Visita Agendada',next:T,notes:'Orçamento até R$ 650 mil, usa financiamento.'},
+      {id:uid(),name:'Ana Paula Souza',wa:'48999990002',origin:'Indicação',interest:'Apto 2 quartos - Ingleses',status:'Em Atendimento',next:addDays(T,-2),notes:'Quer perto da praia, aceita 1ª vaga.'},
+      {id:uid(),name:'Roberto Lima',wa:'48999990003',origin:'Portal',interest:'Terreno 450m² - Rio Vermelho',status:'Novo Lead',next:addDays(T,3),notes:'Chegou pelo portal, ainda não respondeu.'}
+    ],
+    events:[
+      {id:uid(),title:'Visita com Carlos Mendes',type:'Visita',date:T,time:'15:00',notes:'Casa na Rua das Palmeiras',done:false},
+      {id:uid(),title:'Ligar pro proprietário (captação)',type:'Ligação',date:addDays(T,1),time:'10:00',notes:'',done:false},
+      {id:uid(),title:'Buscar a Mel na escola',type:'Lembrete pessoal',date:addDays(T,2),time:'17:30',notes:'',done:false}
+    ],
+    fin:[
+      {id:uid(),desc:'Comissão - venda Casa Ingleses',amount:3500,date:addDays(T,5),type:'Receita',cat:'Comissão',status:'Pendente',rec:'Nenhuma'},
+      {id:uid(),desc:'Internet',amount:109.9,date:addDays(T,-1),type:'Despesa',cat:'Moradia',status:'Pendente',rec:'Mensal'},
+      {id:uid(),desc:'Cartão de crédito',amount:850,date:T,type:'Despesa',cat:'Dívidas',status:'Pendente',rec:'Nenhuma'}
+    ]
+  };
+}
+
+/* ================= CONSTANTES / ESTADO ================= */
+const ST=['Novo Lead','Em Atendimento','Visita Agendada','Proposta','Fechado','Perdido'];
+const stCol={'Novo Lead':'bg-sky-500/20 text-sky-400','Em Atendimento':'bg-violet-500/20 text-violet-400','Visita Agendada':'bg-amber-500/20 text-amber-500','Proposta':'bg-orange-500/20 text-orange-400','Fechado':'bg-emerald-500/20 text-emerald-500','Perdido':'bg-slate-500/20 text-slate-400'};
+const ORIG=['Instagram','Indicação','Portal','WhatsApp','Plantão','Placa','Outro'];
+const EVT=['Visita','Ligação','Reunião','Lembrete pessoal'];
+const CATS=['Comissão','Extra','Moradia','Alimentação','Transporte','Dívidas','Saúde','Outros'];
+const TABS=[['dash','Início','layout-dashboard'],['crm','Clientes','users'],['cal','Agenda','calendar'],['fin','Financeiro','wallet']];
+const S={tab:'dash',q:'',st:'',cm:'month',cur:T,finF:'open'};
+
+const closed=c=>c.status=='Fechado'||c.status=='Perdido';
+const fuState=c=>{if(closed(c)||!c.next)return null;return c.next<T?'late':c.next==T?'today':'ok'};
+const finState=f=>f.status=='Pago'?'paid':f.date<T?'late':f.date==T?'today':'open';
+
+/* ================= COMPONENTES ================= */
+const clientCard=c=>{
+  const s=fuState(c),col=s=='late'?'red':s=='today'?'amber':'slate';
+  return `<div class="card border-l-4 border-l-${col}-500">
+  <div class="flex justify-between gap-2"><div class="min-w-0"><div class="font-semibold truncate">${esc(c.name)}</div><div class="text-xs opacity-70 truncate">${esc(c.interest)} · ${esc(c.origin)}</div></div><span class="bdg ${stCol[c.status]}">${c.status}</span></div>
+  ${c.next?`<div class="text-xs mt-1 ${s=='late'?'text-red-500 font-bold':s=='today'?'text-amber-500 font-bold':'opacity-70'}">${s=='late'?'Atrasado desde ':s=='today'?'Follow-up HOJE · ':'Follow-up: '}${br(c.next)}</div>`:''}
+  ${c.notes?`<div class="text-xs opacity-70 mt-1">${esc(c.notes)}</div>`:''}
+  <div class="flex flex-wrap gap-2 mt-2"><a class="btn btn-g" href="${wa(c.wa)}" target="_blank" rel="noopener">${ic('message-circle')}WhatsApp</a>
+  ${c.next&&!closed(c)?`<button class="btn" data-a="fuDone" data-id="${c.id}">${ic('check')}Follow-up feito</button>`:''}
+  <button class="btn" data-a="editClient" data-id="${c.id}">${ic('pencil')}</button></div></div>`;
+};
+
+const finRow=f=>{
+  const s=finState(f),rc=f.type=='Receita';
+  const bd={paid:'border-l-emerald-500',late:'border-l-red-500',today:'border-l-amber-400',open:'border-l-slate-500'}[s];
+  const lb={paid:['Pago','bg-emerald-500/20 text-emerald-400'],late:['Vencido','bg-red-500/20 text-red-500'],today:['Vence hoje','bg-amber-500/20 text-amber-500'],open:['Pendente','bg-slate-500/20']}[s];
+  return `<div class="card border-l-4 ${bd} flex items-center gap-2 ${s=='paid'?'opacity-60':''}">
+  <div class="flex-1 min-w-0"><div class="font-medium truncate">${esc(f.desc)}${f.rec!='Nenhuma'?ic('repeat','w-3 h-3 inline ml-1'):''}</div><div class="text-xs opacity-70">${br(f.date)} · ${esc(f.cat)}</div></div>
+  <div class="text-right"><div class="font-bold ${rc?'text-emerald-500':'text-rose-500'}">${rc?'+':'-'}${brl(f.amount)}</div><span class="bdg ${lb[1]}">${lb[0]}</span></div>
+  <button class="btn" data-a="payFin" data-id="${f.id}" title="Pago/Pendente">${ic(s=='paid'?'undo-2':'check')}</button>
+  <button class="btn" data-a="editFin" data-id="${f.id}">${ic('pencil')}</button></div>`;
+};
+
+const evItem=e=>({k:'ev',id:e.id,time:e.time||'',t:e.title,sub:e.type,done:e.done,c:'indigo'});
+const itemRow=x=>`<div class="flex items-center gap-2 text-sm py-1.5 px-2 rounded-lg border-l-4 border-${x.c}-500 bg-${x.c}-500/10 ${x.done?'opacity-50 line-through':''}">
+  <button class="flex-1 min-w-0 text-left" data-a="openItem" data-k="${x.k}" data-id="${x.id}"><span class="opacity-70">${x.time}</span> ${esc(x.t)}<div class="text-xs opacity-60">${esc(x.sub)}</div></button>
+  <button class="btn" data-a="doneItem" data-k="${x.k}" data-id="${x.id}">${ic('check')}</button></div>`;
+const items=d=>[
+  ...DS.list('events').filter(e=>e.date===d).map(evItem),
+  ...DS.list('clients').filter(c=>c.next===d&&!closed(c)).map(c=>({k:'fu',id:c.id,time:'',t:'Follow-up: '+c.name,sub:c.interest,done:false,c:'amber'})),
+  ...DS.list('fin').filter(f=>f.date===d).map(f=>({k:'fin',id:f.id,time:'',t:(f.type=='Receita'?'+ ':'- ')+brl(f.amount)+' · '+f.desc,sub:f.cat,done:f.status=='Pago',c:f.type=='Receita'?'emerald':'rose'}))
+].sort((a,b)=>a.time.localeCompare(b.time));
+const stat=(l,v,c='')=>`<div class="card"><div class="text-xs opacity-70">${l}</div><div class="text-xl font-bold ${c}">${v}</div></div>`;
+const sec=(t,b)=>b?`<h2 class="font-semibold mt-5 mb-2">${t}</h2><div class="space-y-2">${b}</div>`:'';
+
+/* ================= VIEWS ================= */
+const views={
+dash(){
+  const cl=DS.list('clients'),ev=DS.list('events'),fi=DS.list('fin');
+  const due=cl.filter(c=>['late','today'].includes(fuState(c))).sort((a,b)=>a.next.localeCompare(b.next));
+  const in7=f=>f.status!='Pago'&&f.date>=T&&f.date<=addDays(T,7);
+  const pay=sum(fi.filter(f=>in7(f)&&f.type=='Despesa')),rec=sum(fi.filter(f=>in7(f)&&f.type=='Receita'));
+  const mo=fi.filter(f=>f.date.slice(0,7)==T.slice(0,7));
+  const saldo=sum(mo.filter(f=>f.type=='Receita'))-sum(mo.filter(f=>f.type=='Despesa'));
+  const lateFin=fi.filter(f=>f.status!='Pago'&&f.date<=T).sort(byDate);
+  const lateEv=ev.filter(e=>!e.done&&e.date<T);
+  const alerts=due.map(clientCard).join('')+lateFin.map(finRow).join('')+lateEv.map(e=>itemRow(evItem(e))).join('');
+  return `<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    ${stat('Contatar hoje',due.length,due.length?'text-amber-500':'')}
+    ${stat('Compromissos hoje',ev.filter(e=>e.date==T&&!e.done).length)}
+    ${stat('A pagar (7 dias)',brl(pay),'text-rose-500')}
+    ${stat('A receber (7 dias)',brl(rec),'text-emerald-500')}</div>
+    <div class="card mt-3">${stat('Saldo previsto do mês (receitas - despesas)',brl(saldo),saldo<0?'text-red-500':'text-emerald-500').replace('card','')}</div>
+    ${sec('🚨 Alertas: atrasados e vencendo hoje',alerts)}
+    ${sec('Agenda de hoje',items(T).map(itemRow).join('')||'<div class="text-sm opacity-60">Nada agendado pra hoje.</div>')}`;
+},
+crm(){
+  return `<div class="flex gap-2 mb-3"><input id="q" class="inp" placeholder="Buscar nome, imóvel, notas..." value="${esc(S.q)}">
+  <select id="stf" class="inp w-auto"><option value="">Todos</option>${ST.map(s=>`<option ${S.st==s?'selected':''}>${s}</option>`).join('')}</select>
+  <button class="btn btn-p" data-a="newClient">${ic('plus')}Novo</button></div>
+  <div id="list" class="grid gap-2 md:grid-cols-2">${crmList()}</div>`;
+},
+cal(){
+  const m=S.cm;
+  const head=`<div class="flex flex-wrap items-center gap-2 mb-3">
+  <button class="btn" data-a="calNav" data-id="-1">${ic('chevron-left')}</button><button class="btn" data-a="calNav" data-id="0">Hoje</button><button class="btn" data-a="calNav" data-id="1">${ic('chevron-right')}</button>
+  <div class="font-semibold capitalize flex-1 min-w-[8rem]">${calTitle()}</div>
+  ${[['month','Mês'],['week','Semana'],['day','Dia'],['list','Lista']].map(([k,l])=>`<button class="btn ${m==k?'btn-p':''}" data-a="calMode" data-id="${k}">${l}</button>`).join('')}
+  <button class="btn btn-p" data-a="newEv">${ic('plus')}Novo</button></div>
+  <div class="flex gap-3 text-xs opacity-70 mb-3"><span>🟦 Compromisso</span><span>🟨 Follow-up</span><span>🟩 Receita</span><span>🟥 Despesa</span></div>`;
+  let body='';
+  if(m=='month'){
+    const first=pd(S.cur.slice(0,7)+'-01'),start=addDays(iso(first),-first.getDay());
+    body=`<div class="grid grid-cols-7 gap-1 text-center text-xs opacity-70 mb-1">${'DSTQQSS'.split('').map(x=>`<div>${x}</div>`).join('')}</div><div class="grid grid-cols-7 gap-1">`+
+    Array.from({length:42},(_,i)=>{
+      const d=addDays(start,i),it=items(d),inM=d.slice(0,7)==S.cur.slice(0,7);
+      return `<button data-a="goDay" data-id="${d}" class="min-h-[3.5rem] md:min-h-[5.5rem] p-1 rounded-lg border text-left ${inM?'':'opacity-40'} ${d==T?'border-indigo-500':'border-slate-200 dark:border-slate-800'}">
+      <div class="text-xs font-semibold">${+d.slice(8)}</div><div class="flex flex-wrap gap-0.5 mt-1">${it.slice(0,6).map(x=>`<span class="w-1.5 h-1.5 rounded-full bg-${x.c}-500"></span>`).join('')}</div>
+      ${it.length?`<div class="hidden md:block text-[10px] opacity-70 truncate">${esc(it[0].t)}${it.length>1?' +'+(it.length-1):''}</div>`:''}</button>`;
+    }).join('')+'</div>';
+  }else if(m=='week'){
+    const st=addDays(S.cur,-pd(S.cur).getDay());
+    body=Array.from({length:7},(_,i)=>{const d=addDays(st,i);return `<div class="mb-3"><div class="text-sm font-semibold ${d==T?'text-indigo-500':''}">${pd(d).toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'2-digit'})}</div><div class="space-y-1 mt-1">${items(d).map(itemRow).join('')||'<div class="text-xs opacity-50">—</div>'}</div></div>`}).join('');
+  }else if(m=='day'){
+    body=`<div class="space-y-2">${items(S.cur).map(itemRow).join('')||'<div class="text-sm opacity-60">Dia livre.</div>'}</div>`;
+  }else{
+    body=Array.from({length:120},(_,i)=>addDays(T,i-7)).map(d=>{const it=items(d);return it.length?`<div class="mb-3"><div class="text-sm font-semibold ${d==T?'text-indigo-500':''}">${br(d)}${d==T?' · hoje':''}</div><div class="space-y-1 mt-1">${it.map(itemRow).join('')}</div></div>`:''}).join('')||'<div class="text-sm opacity-60">Nada agendado.</div>';
+  }
+  return head+body;
+},
+fin(){
+  const fi=DS.list('fin'),op=fi.filter(f=>f.status!='Pago');
+  const r=sum(op.filter(f=>f.type=='Receita')),p=sum(op.filter(f=>f.type=='Despesa'));
+  const l=fi.filter(f=>S.finF=='open'?f.status!='Pago':S.finF=='paid'?f.status=='Pago':true).sort(byDate);
+  return `<div class="grid grid-cols-3 gap-2 mb-3">${stat('A receber',brl(r),'text-emerald-500')}${stat('A pagar',brl(p),'text-rose-500')}${stat('Balanço',brl(r-p),r-p<0?'text-red-500':'text-emerald-500')}</div>
+  <div class="flex gap-2 mb-3"><select id="finf" class="inp w-auto">${[['open','Pendentes'],['paid','Pagos'],['all','Todos']].map(([k,t])=>`<option value="${k}" ${S.finF==k?'selected':''}>${t}</option>`).join('')}</select>
+  <button class="btn btn-p" data-a="newFin">${ic('plus')}Nova conta</button></div>
+  <div class="space-y-2">${l.map(finRow).join('')||'<div class="text-sm opacity-60">Nenhum lançamento.</div>'}</div>`;
+}};
+
+function crmList(){
+  const q=S.q.toLowerCase();
+  const l=DS.list('clients').filter(c=>(!S.st||c.status==S.st)&&(!q||[c.name,c.interest,c.notes,c.origin,c.wa].join(' ').toLowerCase().includes(q)))
+    .sort((a,b)=>(closed(a)-closed(b))||((a.next||'9')>(b.next||'9')?1:-1));
+  return l.map(clientCard).join('')||'<div class="text-sm opacity-60">Nenhum cliente encontrado.</div>';
+}
+function calTitle(){
+  const d=pd(S.cur),o=x=>d.toLocaleDateString('pt-BR',x);
+  if(S.cm=='month')return o({month:'long',year:'numeric'});
+  if(S.cm=='week'){const s=addDays(S.cur,-d.getDay());return br(s)+' a '+br(addDays(s,6))}
+  if(S.cm=='day')return o({weekday:'long',day:'2-digit',month:'long',year:'numeric'});
+  return 'Próximos compromissos';
+}
+
+/* ================= RENDER ================= */
+function render(){
+  T=iso(new Date());
+  $('#ttl').textContent=TABS.find(t=>t[0]==S.tab)[1];
+  $('#view').innerHTML=views[S.tab]();
+  $('#sideNav').innerHTML=TABS.map(([id,l,i])=>`<button data-a="tab" data-id="${id}" class="flex items-center gap-2 px-3 py-2 rounded-lg text-left ${S.tab==id?'bg-indigo-600 text-white':'hover:bg-slate-500/20'}">${ic(i)}${l}</button>`).join('');
+  $('#botNav').innerHTML=TABS.map(([id,l,i])=>`<button data-a="tab" data-id="${id}" class="flex-1 flex flex-col items-center py-2 text-xs ${S.tab==id?'text-indigo-500 font-bold':'opacity-70'}">${ic(i,'w-5 h-5')}${l}</button>`).join('');
+  lucide.createIcons();
+}
+
+/* ================= FORMULÁRIOS ================= */
+function form(title,fields,v,save,del){
+  const inp=f=>{
+    const val=esc(v[f.k]??'');
+    const cls='inp';
+    if(f.o)return `<select name="${f.k}" class="${cls}">${f.o.map(o=>`<option ${v[f.k]==o?'selected':''}>${o}</option>`).join('')}</select>`;
+    if(f.t=='area')return `<textarea name="${f.k}" rows="3" class="${cls}">${val}</textarea>`;
+    return `<input name="${f.k}" type="${f.t||'text'}" ${f.t=='number'?'step="0.01" min="0"':''} value="${val}" ${f.r?'required':''} class="${cls}">`;
+  };
+  $('#modal').innerHTML=`<div class="fixed inset-0 bg-black/60 z-50 flex items-end md:items-center justify-center md:p-4"><form id="f" class="card w-full max-w-md max-h-[92vh] overflow-auto space-y-3 p-4 rounded-b-none md:rounded-b-xl">
+  <h3 class="font-bold text-lg">${title}</h3>
+  ${fields.map(f=>`<label class="block text-xs opacity-80">${f.l}${inp(f)}</label>`).join('')}
+  <div class="flex gap-2 justify-end">${del?'<button type="button" id="fd" class="btn text-red-500 mr-auto">Excluir</button>':''}<button type="button" id="fc" class="btn">Cancelar</button><button class="btn btn-p">Salvar</button></div></form></div>`;
+  const close=()=>$('#modal').innerHTML='';
+  $('#fc').onclick=close;
+  if(del)$('#fd').onclick=()=>{if(confirm('Excluir definitivamente?')){del();close();render()}};
+  $('#f').onsubmit=e=>{e.preventDefault();save(Object.fromEntries(new FormData(e.target)));close();render()};
+}
+const clientForm=(c={})=>form(c.id?'Editar cliente':'Novo lead',[
+  {k:'name',l:'Nome',r:1},{k:'wa',l:'WhatsApp (DDD + número)',t:'tel'},{k:'origin',l:'Origem',o:ORIG},
+  {k:'interest',l:'Imóvel / interesse'},{k:'status',l:'Status no funil',o:ST},{k:'next',l:'Próximo follow-up',t:'date'},{k:'notes',l:'Notas',t:'area'}],
+  {status:'Novo Lead',origin:'Instagram',next:addDays(T,1),...c},
+  o=>DS.upsert('clients',{...c,...o}),c.id&&(()=>DS.remove('clients',c.id)));
+const eventForm=(e={})=>form(e.id?'Editar compromisso':'Novo compromisso',[
+  {k:'title',l:'Título',r:1},{k:'type',l:'Tipo',o:EVT},{k:'date',l:'Data',t:'date',r:1},{k:'time',l:'Hora',t:'time'},{k:'notes',l:'Notas',t:'area'}],
+  {type:'Visita',date:S.cm=='day'?S.cur:T,done:false,...e},
+  o=>DS.upsert('events',{done:false,...e,...o}),e.id&&(()=>DS.remove('events',e.id)));
+const finForm=(f={})=>form(f.id?'Editar lançamento':'Nova conta',[
+  {k:'desc',l:'Descrição',r:1},{k:'amount',l:'Valor (R$)',t:'number',r:1},{k:'date',l:'Vencimento',t:'date',r:1},
+  {k:'type',l:'Tipo',o:['Despesa','Receita']},{k:'cat',l:'Categoria',o:CATS},{k:'status',l:'Status',o:['Pendente','Pago']},{k:'rec',l:'Recorrência',o:['Nenhuma','Mensal','Semanal']}],
+  {type:'Despesa',cat:'Outros',status:'Pendente',rec:'Nenhuma',date:T,...f},
+  o=>DS.upsert('fin',{...f,...o,amount:Number(o.amount)}),f.id&&(()=>DS.remove('fin',f.id)));
+
+/* ================= AÇÕES ================= */
+const A={
+  tab:id=>{S.tab=id;render()},
+  theme:()=>{const d=document.documentElement.classList.toggle('dark');DS.pref('theme',d?'dark':'light')},
+  export:()=>{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([DS.exportJSON()],{type:'application/json'}));
+    a.download='crm-backup-'+T+'.json';a.click();
+  },
+  import:()=>$('#imp').click(),
+  newClient:()=>clientForm(),
+  editClient:id=>clientForm(DS.get('clients',id)),
+  fuDone:id=>{
+    const c=DS.get('clients',id),d=prompt('Próximo follow-up em quantos dias? (vazio = sem data)','3');
+    if(d===null)return;
+    c.next=d.trim()&&isFinite(+d)?addDays(T,+d):'';
+    if(c.status=='Novo Lead')c.status='Em Atendimento';
+    DS.upsert('clients',c);render();
+  },
+  newEv:()=>eventForm(),
+  newFin:()=>finForm(),
+  editFin:id=>finForm(DS.get('fin',id)),
+  payFin:id=>{
+    const f=DS.get('fin',id);
+    f.status=f.status=='Pago'?'Pendente':'Pago';
+    if(f.status=='Pago'&&f.rec!='Nenhuma'&&!f.gen){
+      f.gen=1;
+      DS.upsert('fin',{desc:f.desc,amount:f.amount,date:f.rec=='Mensal'?addMonth(f.date):addDays(f.date,7),type:f.type,cat:f.cat,status:'Pendente',rec:f.rec});
+    }
+    DS.upsert('fin',f);render();
+  },
+  calMode:id=>{S.cm=id;render()},
+  calNav:id=>{
+    const n=+id;
+    if(n==0)S.cur=T;
+    else if(S.cm=='month'){const d=pd(S.cur.slice(0,7)+'-01');d.setMonth(d.getMonth()+n);S.cur=iso(d)}
+    else S.cur=addDays(S.cur,S.cm=='week'?7*n:n);
+    render();
+  },
+  goDay:id=>{S.cur=id;S.cm='day';render()},
+  openItem:(id,ds)=>ds.k=='ev'?eventForm(DS.get('events',id)):ds.k=='fu'?clientForm(DS.get('clients',id)):finForm(DS.get('fin',id)),
+  doneItem:(id,ds)=>{
+    if(ds.k=='ev'){const e=DS.get('events',id);e.done=!e.done;DS.upsert('events',e);render()}
+    else if(ds.k=='fu')A.fuDone(id);else A.payFin(id);
+  }
+};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(b)A[b.dataset.a](b.dataset.id,b.dataset)});
+document.addEventListener('input',e=>{if(e.target.id=='q'){S.q=e.target.value;$('#list').innerHTML=crmList();lucide.createIcons()}});
+document.addEventListener('change',e=>{
+  const t=e.target;
+  if(t.id=='stf'){S.st=t.value;$('#list').innerHTML=crmList();lucide.createIcons()}
+  if(t.id=='finf'){S.finF=t.value;render()}
+  if(t.id=='imp'&&t.files[0]){
+    const r=new FileReader();
+    r.onload=()=>{try{DS.importJSON(r.result);render();alert('Dados importados!')}catch(err){alert('Falha ao importar: '+err.message)}};
+    r.readAsText(t.files[0]);t.value='';
+  }
+});
+
+document.documentElement.classList.toggle('dark',DS.pref('theme')!='light');
+render();
+</script>
+</body>
+</html>
